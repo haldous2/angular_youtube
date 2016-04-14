@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>App to search YouTube, save favorites</title>
+
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/skeleton/2.0.4/skeleton.min.css">
+
+<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.4.9/angular.min.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.4.9/angular-cookies.min.js"></script>
+<script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCy-vLynQPFiZYKi5MseTmOfHMKLmxCJww&libraries=places"></script>
+
+<script src="scripts/gpAutocomplete.js"></script>
+<script src="scripts/simpleStore.js"></script>
+
+<script>
+
+    var app = angular.module('myApp', ['ngCookies','gpAutocomplete']);
+
+    /*
+     Load Run
+    */
+
+    app.run(function () {
+    	var tag = document.createElement('script');
+    	tag.src = "http://www.youtube.com/iframe_api";
+    	var firstScriptTag = document.getElementsByTagName('script')[0];
+    	firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    });
+
+    /*
+     Service
+     Note: when minified, injectors will need to be defined in brackets e.g. controller('name', ['$injector','$injector' function($injector, $injector)])
+     Note: $scope cannot be injected into .service(s) however, $rootScope can
+    */
+
+    /*
+     Service: VideosService
+     borrowed heavily from - https://onsen.io/blog/onsen-ui-youtube-api-v3/
+    */
+	app.service('VideosService', ['$window', '$log', '$cookies', function ($window, $log, $cookies) {
+
+        var service = this;
+
+        var youtube = {
+            ready: false,
+            player: null,
+            playerId: null,
+            videoId: null,
+            videoTitle: null,
+            playerHeight: '480',
+            playerWidth: '640',
+            state: 'stopped'
+        };
+
+        var results = [];
+        var favorites = [];
+
+		$window.onYouTubeIframeAPIReady = function () {
+			$log.info('Youtube API is ready');
+			youtube.ready = true;
+            /* Bind player when video link is clicked! - need a way to load a blank video, or just a black div */
+			service.bindPlayer('ytVideo');
+			service.loadPlayer();
+		};
+
+		function onYoutubeReady (event) {
+			$log.info('YouTube Player is ready');
+		}
+
+        function onPlayerStateChange(event) {
+            $log.info('YouTube State:' + event.data);
+        }
+
+		this.bindPlayer = function (elementId) {
+			$log.info('Binding to ' + elementId);
+			youtube.playerId = elementId;
+		};
+
+		this.createPlayer = function () {
+			$log.info('Creating a new Youtube player for DOM id ' + youtube.playerId + ' and video ' + youtube.videoId);
+			return new YT.Player(youtube.playerId, {
+				height: youtube.playerHeight,
+				width: youtube.playerWidth,
+				playerVars: {
+					rel: 0,
+					showinfo: 0
+				},
+				events: {
+					'onReady': onYoutubeReady,
+                    'onStateChange': onPlayerStateChange
+				}
+			});
+		};
+
+		this.loadPlayer = function () {
+			if (youtube.ready && youtube.playerId) {
+				if (youtube.player) {
+					youtube.player.destroy();
+				}
+				youtube.player = service.createPlayer();
+			}
+		};
+
+		this.launchPlayer = function (id, title) {
+			youtube.player.loadVideoById(id);
+			youtube.videoId = id;
+			youtube.videoTitle = title;
+			return youtube;
+		}
+
+		this.listResults = function (data) {
+
+			results.length = 0;
+            favorites.length = 0;
+            var isFavorite = false;
+
+            var allFavorites = store('favorites');
+            if (allFavorites){
+                arrFavorites = allFavorites.split(',');
+                for (id in arrFavorites){
+                    favorites[arrFavorites[id]] = true;
+                }
+            }
+
+			for (var i = data.items.length - 1; i >= 0; i--) {
+
+                if (favorites[data.items[i].id.videoId]){
+                    isFavorite = true;
+                }else{
+                    isFavorite = false;
+                }
+
+				results.push({
+					id: data.items[i].id.videoId,
+					title: data.items[i].snippet.title,
+					description: data.items[i].snippet.description,
+					thumbnail: data.items[i].snippet.thumbnails.default.url,
+					author: data.items[i].snippet.channelTitle,
+                    favorite: isFavorite
+				});
+			}
+			return results;
+		}
+
+        this.listFavorites = function (data) {
+
+            results.length = 0;
+
+            for (var i = data.items.length - 1; i >= 0; i--) {
+
+                results.push({
+                    id: data.items[i].id.videoId,
+                    title: data.items[i].snippet.title,
+                    description: data.items[i].snippet.description,
+                    thumbnail: data.items[i].snippet.thumbnails.default.url,
+                    author: data.items[i].snippet.channelTitle,
+                    favorite: true
+                });
+            }
+            return results;
+        }
+
+		this.getYoutube = function () {
+			return youtube;
+		};
+
+		this.getResults = function () {
+			return results;
+		};
+
+        this.addFavorite = function(videoId){
+            /*
+             Mental note: should I move these into the controller and load favorites array once ?
+                          need to figure out the scope of an array built in service vs. factory vs. controller
+             Add id to store.favorites
+             Check if it exists
+             return new store.favorites
+            */
+            if (videoId){
+
+                var foundId = false;
+
+                var allFavorites = store('favorites');
+                if (allFavorites){
+                    arrFavorites = allFavorites.split(',');
+                    for (id in arrFavorites){
+                        if (arrFavorites[id] == videoId){
+                            foundId = true;
+                            break;
+                        }
+                    }
+                }
+                if (!foundId){
+                    /*
+                     Add to store since we didn't find the new Id
+                    */
+                    var strFavorites = allFavorites + ',' + videoId;
+                    store('favorites', strFavorites);
+                }
+            }
+        }
+
+        this.delFavorite = function(videoId){
+            /*
+             Remove id to store.favorites
+             Check if it exists
+             return new store.favorites
+             Mental note: this is a really bad insertion sort type of thing - ways to optimize?
+            */
+            if (videoId){
+
+                var strFavorites = '';
+                favorites.length = 0;
+
+                var allFavorites = store('favorites');
+                if (allFavorites){
+                    arrFavorites = allFavorites.split(',');
+                    for (id in arrFavorites){
+                        if (arrFavorites[id] != videoId && arrFavorites[id]){
+                            favorites.push(arrFavorites[id]);
+                        }
+                    }
+                }
+                if (favorites.length > 0){
+                    strFavorites = favorites.join(',');
+                }
+                store('favorites', strFavorites);
+            }
+        }
+
+	}]);
+
+	/*
+     Controller: VideosController
+     (links view to service, provider, factory)
+    */
+	app.controller('VideosController', function ($scope, $http, $log, $parse, VideosService) {
+
+		init();
+
+		function init() {
+
+			$scope.youtube = VideosService.getYoutube();
+			$scope.results = VideosService.getResults();
+
+            $scope.ytSort = 'date';
+            $scope.ytData = 'youtube';
+            $scope.gpRadius = '5m';
+		}
+
+		$scope.launch = function (id, title) {
+			VideosService.launchPlayer(id, title);
+			$log.info('Launched id:' + id + ' and title:' + title);
+		};
+
+		$scope.search = function () {
+
+            /*
+             Note: order only goes from highest to lowest for date, relevance and rating (default order date)
+             Note: location is a string of lat, lon - with locationRadius being a string floating point of value m, km, ft, and mi
+            */
+
+            /*
+             Building YouTube API parameters
+            */
+            var ytParams = {
+                key: 'AIzaSyCy-vLynQPFiZYKi5MseTmOfHMKLmxCJww',
+                type: 'video',
+                maxResults: '10',
+                part: 'id,snippet',
+                fields: 'items/id,items/snippet/title,items/snippet/description,items/snippet/thumbnails/default,items/snippet/channelTitle',
+                q: this.ytQuery
+            }
+
+            /*
+             Evaluate order by selection - default to date if non selected
+            */
+            var ytSort = $scope.ytSort;
+            if (typeof(ytSort) != 'undefined' && (ytSort == 'date' || ytSort == 'rating' || ytSort == 'relevance')){
+                ytParams['order'] = ytSort;
+            }else{
+                ytParams['order'] = 'date';
+                $scope.ytSort = 'date';
+            }
+
+            /*
+             Evaluate data location youtube or favorites
+             Note: maxResults are 50 - issues with number of favorites saved vs. results displayed
+                   might need to implement paging
+            */
+            var ytData = $scope.ytData;
+            if (typeof(ytData) != 'undefined' && ytData == 'favorites'){
+                var strFavorites = store('favorites');
+                if (strFavorites){
+                    ytParams['id'] = strFavorites;
+                }
+            }else{
+                $scope.ytData = 'youtube';
+            }
+
+            /*
+             Evaluate location information
+            */
+            var gpLatLng = $scope.gplatlng;
+            var gpRadius = $scope.gpRadius;
+            if (!gpRadius){
+                gpRadius = '5m';
+                $scope.gpRadius = gpRadius;
+            }
+            /*
+             Inject object parameters for location if they exist
+            */
+            var gpLocation = '';
+            if (typeof(gpLatLng) != 'undefined' && gpLatLng != ''){
+                ytParams['location'] = gpLatLng;
+                ytParams['locationRadius'] = gpRadius;
+            }
+
+            if (ytParams['id']){
+                /*
+                 YouTube API .videos, filtering with id's
+                */
+                ytAPI = 'https://www.googleapis.com/youtube/v3/videos';
+            }else{
+                /*
+                 YouTube API .search, searching all videos
+                */
+                ytAPI = 'https://www.googleapis.com/youtube/v3/search';
+            }
+
+            $http.get(ytAPI, {
+                params: ytParams
+            })
+            .then(function(response) {
+                if (ytParams['id']){
+                    VideosService.listFavorites(response.data);
+                }else{
+                    VideosService.listResults(response.data);
+                }
+                //$log.info(response.data);
+            })
+            .catch(function(response) {
+              $log.info('http.get error:');
+              $log.info('status:', response.status);
+              $log.info('domain:', response.data.error.errors[0].domain);
+              $log.info('message:', response.data.error.errors[0].message);
+              $log.info('reason:', response.data.error.errors[0].reason);
+            })
+            .finally(function() {
+              //$log.info("finally finished!");
+            });
+
+		}
+
+        $scope.setFavorite = function(vid){
+
+            if (vid.favorite){
+                vid.favorite = false;
+                VideosService.delFavorite(vid.id);
+            }else{
+                vid.favorite = true;
+                VideosService.addFavorite(vid.id);
+            }
+        }
+
+	});
+
+	</script>
+
+    <style>
+
+    .noFavorite{
+        border:1px solid #333333;
+        color:#333333;
+    }
+    .noFavorite:before{
+        content: "Mark as favorite";
+    }
+    .myFavorite{
+        border:1px solid #00FF00 !important;
+        color:#00FF00 !important;
+    }
+    .myFavorite:before{
+        content: "My favorite!";
+    }
+
+    </style>
+
+</head>
+<body data-ng-app="myApp" data-ng-controller="VideosController">
+
+    <form method="post">
+
+    	<input id="ytQuery" type="text" placeholder="Search for a YouTube video" data-ng-model="ytQuery" />
+        <input type="text" id="gpQuery" placeholder="Enter your city here" gp-autocomplete="" gp-details="gplatlng" gp-options="{types:'(cities)'}" />
+        <select id="gpRadius" data-ng-model="gpRadius">
+            <option value="5m">5 miles
+            <option value="10m">10 miles
+            <option value="15m">15 miles
+            <option value="20m">20 miles
+        </select>
+        <select id="ytSort" data-ng-model="ytSort">
+            <option value="date">Date
+            <option value="rating">Rating
+            <option value="relevance">Relevance
+        </select>
+        <select id="ytData" data-ng-model="ytData">
+            <option value="youtube">YouTube videos
+            <option value="favorites">My favorites
+        </select>
+        <input type="hidden" id="gpLatLng" data-ng-model="gplatlng" value="{{ gplatlng }}" />
+
+        <input id="submit" type="button" value="Search Videos!" alt="Search Videos!" data-ng-click="search()" />
+
+	</form>
+
+	<div id="results" style="border-top:1px solid #CCCCCC;">
+    	<div class="video" data-ng-repeat="video in results as i">
+            <div class="video-block" data-ng-click="launch(video.id, video.title)">
+            	<img class="video-image" data-ng-src="{{ video.thumbnail }}" />
+            	<p class="video-title">{{ video.title }}</p>
+            	<p class="video-author">{{ video.author }}</p>
+            	<p class="video-description">{{ video.description }}</p>
+            </div>
+            <button data-ng-click='setFavorite(video)' data-ng-class='{"myFavorite": video.favorite, "noFavorite": !video.favorite}'></button>
+    	</div>
+	</div>
+
+	<div id="player">
+		<div id="ytVideo" style="width: 100%"></div>
+	</div>
+
+</body>
+</html>
